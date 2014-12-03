@@ -1,0 +1,32 @@
+#!/bin/bash
+
+url=$1
+test $url || {
+  echo "Usage: $0 url"
+}
+
+# prep for loop
+tmp_file='/tmp/.auto-paginate-cache'
+next_page="$url"
+
+while true; do
+
+# curl
+# silence download time
+# provide headers for "Link"
+# include options (e.g. Authentication headers)
+# stuff it in a tmp file
+  curl $next_page -s -i "${@:2}" > $tmp_file
+
+  next_page=$(
+    cat $tmp_file     |
+    grep '^Link:'     |  # only look at the Link Header http://tools.ietf.org/html/rfc5988#section-5
+    tr , '\n'         |  # turn commas into newlines
+    grep 'rel="next"' |  # stop without a "next" link
+    sed 's/^$//g'     |  # omit blank lines
+    sed -E 's/(Link:|<|>|;|rel="next")//g'  # trim to only the link
+  )
+
+  cat $tmp_file  | json -H        # strip headers and spit out json
+  test -n "$next_page" || break   # break if this was the last page
+done | json -g                    # concat arrays
