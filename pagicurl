@@ -1,5 +1,9 @@
 #!/bin/bash
 
+test -t 1 || {
+  in_pipeline=true
+}
+
 url=$1
 test $url || {
   echo "Usage: $0 url"
@@ -7,26 +11,80 @@ test $url || {
 
 # prep for loop
 tmp_file='/tmp/.auto-paginate-cache'
-next_page="$url"
+next_page_url="$url"
+
+function trim_trailing_ws() {
+  sed 's/	/  /g'   | # tabs to spaces
+  sed 's/[ ]*$//g' | # trailing space to nothing
+  sed 's/*$//g'    # remove weird trailing return char
+}
+
+function trim_response_to_headers() {
+  # multiline match
+  #   first separating blank line (separation of headers and body)
+  # through
+  #   any line (the rest of the file)
+  # then delete them
+  sed -E "/^$/,/\s./d" # math for new line through  (request body), then delete it
+}
+
+function trim_response_to_body() {
+  # multiline match
+  #   http response code line (first line)
+  # through
+  #   first separating blank line (separation of headers and body)
+  # then delete them
+  sed -E '/(HTTP|http)/,/^$/d'
+}
+
+function link_header_from_response() {
+  trim_response_to_headers |
+  grep '^Link:'
+}
+
+function named_link_from_link_header() {
+  local name=$1
+
+  tr , '\n'            |  # turn commas into newlines
+  grep 'rel="'$name'"' |  # stop without a "next" link
+  sed 's/^$//g'        |  # omit blank lines
+  sed -E 's/(Link:|<|>|;|rel="'$name'")//g'  # trim to only the link
+}
+
+function get_next_page_url() {
+  cat $tmp_file             |
+  link_header_from_response |
+  named_link_from_link_header "next"
+}
+
+function get_named_link_header() {
+  cat $tmp_file             |
+  link_header_from_response |
+  named_link_from_link_header "last"
+}
+
+function stderrcho() {
+  >&2 echo "$@"
+}
+
+function monitor_if_in_pipeline() {
+  test -n "$in_pipeline" && {
+    stderrcho "$next_page_url / $(get_named_link_header)"
+  }
+}
 
 while true; do
-
-# curl
-# silence download time
-# provide headers for "Link"
+# curl next page
+# -s silence download time
+# -i provide headers
 # include options (e.g. Authentication headers)
 # stuff it in a tmp file
-  curl $next_page -s -i "${@:2}" > $tmp_file
-
-  next_page=$(
-    cat $tmp_file     |
-    grep '^Link:'     |  # only look at the Link Header http://tools.ietf.org/html/rfc5988#section-5
-    tr , '\n'         |  # turn commas into newlines
-    grep 'rel="next"' |  # stop without a "next" link
-    sed 's/^$//g'     |  # omit blank lines
-    sed -E 's/(Link:|<|>|;|rel="next")//g'  # trim to only the link
-  )
+  monitor_if_in_pipeline
+  curl $next_page_url -s -i "${@:2}" > $tmp_file
+  next_page_url=$(get_next_page_url)
 
   cat $tmp_file  | json -H        # strip headers and spit out json
-  test -n "$next_page" || break   # break if this was the last page
+  test -n "$next_page_url" || break   # break if this was the last page
 done | json -g                    # concat arrays
+
+rm $tmp_file
