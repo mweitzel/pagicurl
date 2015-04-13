@@ -1,8 +1,5 @@
 #!/bin/bash
 
-test -t 1 || {
-  in_pipeline=true
-}
 
 url=$1
 test $url || {
@@ -12,11 +9,16 @@ test $url || {
 # prep for loop
 tmp_file='/tmp/.auto-paginate-cache'
 next_page_url="$url"
+test -t 1 || in_pipeline=true
 
 function trim_trailing_ws() {
   sed 's/	/  /g'   | # tabs to spaces
   sed 's/[ ]*$//g' | # trailing space to nothing
   sed 's/*$//g'    # remove weird trailing return char
+}
+
+function trim_blank_lines() {
+  grep -v ^$
 }
 
 function trim_response_to_headers() {
@@ -25,16 +27,16 @@ function trim_response_to_headers() {
   # through
   #   any line (the rest of the file)
   # then delete them
-  sed -E "/^$/,/\s./d" # math for new line through  (request body), then delete it
+  sed -e '/^$/,/$./d'
 }
 
 function trim_response_to_body() {
   # multiline match
   #   http response code line (first line)
   # through
-  #   first separating blank line (separation of headers and body)
+  #   first separating blank line, which might contain a CR (^M), (the separation of headers and body)
   # then delete them
-  sed -E '/(HTTP|http)/,/^$/d'
+  sed -E -e '/(^HTTP|^http)/,/^$/d'
 }
 
 function link_header_from_response() {
@@ -73,6 +75,34 @@ function monitor_if_in_pipeline() {
   }
 }
 
+# http://tools.ietf.org/html/rfc4627#section-1.1
+# legal padding whitespace characters:
+#   %x20 Space
+#   %x09 Horizontal tab
+#   %x0A Line feed or New line
+#   %x0D Carriage return
+# TODO all of these are replaced with spaces before strip functions are called
+
+function strip_leading_begin_array_character() {
+  sed -E '1s/^[ ]*[\[]?//'
+  # remove zero or more spaces and zero to one [ beginine the first line
+}
+
+function strip_trailing_end_array_character() {
+  sed -E '1s/]?[ ]*$//'
+  # remove zero to one ] and zero or more spaces followed by an end of line
+}
+
+function strip_parent_array_brackets() {
+  strip_leading_begin_array_character |
+  tail -r | # reverse line order, so we can play with only the first one
+  strip_trailing_end_array_character |
+  tail -r   # reverse line order, so they are in normal order again
+}
+
+# emit array begin
+echo '['
+
 while true; do
 # curl next page
 # -s silence download time
@@ -83,8 +113,22 @@ while true; do
   curl $next_page_url -s -i "${@:2}" > $tmp_file
   next_page_url=$(get_next_page_url)
 
-  cat $tmp_file  | json -H        # strip headers and spit out json
+#  cat $tmp_file  | json -H        # strip headers and spit out json
+  cat $tmp_file |
+  trim_trailing_ws |
+  trim_response_to_body |
+  trim_trailing_ws |
+  trim_blank_lines |
+   strip_parent_array_brackets
+
   test -n "$next_page_url" || break   # break if this was the last page
-done | json -g                    # concat arrays
+
+  # emit array value separator
+  echo ','
+
+done #| json -g                    # concat arrays
+
+# emit array end
+echo ']'
 
 rm $tmp_file
