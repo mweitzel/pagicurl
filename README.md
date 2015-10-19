@@ -1,13 +1,12 @@
 ## pagicurl
 
-Wraps curl with some bash to attempt automaitc pagination.
+Curl paginated results. This script wraps curl and follows pagination headers for succesive calls.
 
 Uses the Link Header as defined here: http://tools.ietf.org/html/rfc5988#section-5
 
 Only works with json response types
 
-Works just like curl, but requires uri to come first.
-
+Works just like curl, and accepts all flags, but requires uri to come first.
 
 Calling this:
 ```bash
@@ -19,4 +18,4 @@ where this:
 ```bash
 $ curl https://api.github.com/user/repos -H "Authorization: token $GITHUB_API_TOKEN"
 ```
-would only return 30, or whatever the default pagination limit is
+would only return up to the first 30 results
